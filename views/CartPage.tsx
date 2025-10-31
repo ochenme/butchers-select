@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useCart } from '../contexts/CartContext';
 import { Link, useNavigate } from 'react-router-dom';
-import { SHEET_API } from '../services/geminiService';
+import { submitOrder } from '../services/geminiService';
 
 const TrashIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
     <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" {...props}>
@@ -56,19 +56,7 @@ const CartPage: React.FC = () => {
     };
 
     try {
-        // FIX: Use the imported SHEET_API constant instead of import.meta.env to avoid type errors.
-        const response = await fetch(SHEET_API, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(orderData),
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
+        await submitOrder(orderData);
         clearCart();
         navigate(`/confirmation/${orderId}`);
     } catch (error) {

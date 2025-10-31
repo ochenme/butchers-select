@@ -1,84 +1,122 @@
-import { Product } from "../types";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { db, storage } from "./firebase";
+import { Product, type Order } from "../types";
 
-// FIX: Export SHEET_API to be used across the application, removing the need for environment variables in components.
-export const SHEET_API = "https://script.google.com/macros/s/AKfycbxdj8R5qQdOI_EyqGjDtqUiKQbkxBWlv9lnupwoSppCCr985Bhv_sMDamZgIuliDI5e/exec";
+const PRODUCTS_COLLECTION = "products";
+const ORDERS_COLLECTION = "orders";
+const ANNOUNCEMENTS_COLLECTION = "announcements";
+const ANNOUNCEMENT_DOC_ID = "site";
+let cachedAnnouncementDocId: string | null = null;
 
-
-// 🔹 讀取商品（GET）
 export const fetchProducts = async (): Promise<Product[]> => {
   try {
-    console.log("📡 Fetching products from Google Sheet:", SHEET_API);
-    const res = await fetch(SHEET_API);
-    if (!res.ok) throw new Error("Failed to fetch");
-    const data = await res.json();
-    return data;
-  } catch (err) {
-    console.error("❌ Error fetching products:", err);
-    return [];
+    const snapshot = await getDocs(collection(db, PRODUCTS_COLLECTION));
+    return snapshot.docs.map((document) => ({ id: document.id, ...(document.data() as Omit<Product, "id">) }));
+  } catch (error) {
+    console.error("Error fetching products from Firestore", error);
+    throw error;
   }
 };
 
-// 🔹 新增商品（POST）
 export const addProduct = async (product: Product) => {
-  const SHEET_API = "https://script.google.com/macros/s/AKfycbz-IFprQoGLeW-BQjaxHTSR-TZ0ZRKQo-CVxOtd78a4iL-5qte98gVR2Pc1NgP9Q-SN/exec";
-
-  const q = new URLSearchParams({
-    action: "add",
-    id: String(product.id),
-    name: product.name || "",
-    category: product.category || "",
-    description: product.description || "",
-    price: String(product.price ?? ""),
-    imageUrl: product.imageUrl || "",
-  });
-
   try {
-    console.log("🟢 Adding product:", `${SHEET_API}?${q.toString()}`);
-    const res = await fetch(`${SHEET_API}?${q.toString()}`);
-    const text = await res.text();
-    console.log("✅ Add result:", text);
-  } catch (err) {
-    console.error("❌ Error adding product:", err);
+    const productRef = doc(db, PRODUCTS_COLLECTION, product.id);
+    await setDoc(productRef, product);
+  } catch (error) {
+    console.error("Error adding product to Firestore", error);
+    throw error;
   }
 };
 
-
-/** 📙 更新商品 */
 export const updateProduct = async (product: Product) => {
-  const q = new URLSearchParams({
-    action: "add",
-    id: String(product.id),
-    name: product.name || "",
-    category: product.category || "",
-    description: product.description || "",
-    price: String(product.price ?? ""),
-    imageUrl: encodeURIComponent(product.imageUrl || ""),
-  });
-
-
   try {
-    console.log("🟠 Updating product:", `${SHEET_API}?${q.toString()}`);
-    const res = await fetch(`${SHEET_API}?${q.toString()}`);
-    const text = await res.text();
-    console.log("✅ Update result:", text);
-  } catch (err) {
-    console.error("❌ Error updating product:", err);
+    const productRef = doc(db, PRODUCTS_COLLECTION, product.id);
+    await setDoc(productRef, product, { merge: true });
+  } catch (error) {
+    console.error("Error updating product in Firestore", error);
+    throw error;
   }
 };
 
-/** 📕 刪除商品 */
 export const deleteProduct = async (id: string) => {
-  const q = new URLSearchParams({
-    action: "delete",
-    id: String(id),
-  });
+  try {
+    const productRef = doc(db, PRODUCTS_COLLECTION, id);
+    await deleteDoc(productRef);
+  } catch (error) {
+    console.error("Error deleting product from Firestore", error);
+    throw error;
+  }
+};
+
+export const uploadProductImage = async (file: File | Blob, productId: string): Promise<string> => {
+  const fileExtension = ("name" in file && file.name.split(".").pop()) || "png";
+  const storageRef = ref(storage, `products/${productId}/${Date.now()}.${fileExtension}`);
 
   try {
-    console.log("🔴 Deleting product:", `${SHEET_API}?${q.toString()}`);
-    const res = await fetch(`${SHEET_API}?${q.toString()}`);
-    const text = await res.text();
-    console.log("✅ Delete result:", text);
-  } catch (err) {
-    console.error("❌ Error deleting product:", err);
+    await uploadBytes(storageRef, file);
+    return await getDownloadURL(storageRef);
+  } catch (error) {
+    console.error("Error uploading product image", error);
+    throw error;
+  }
+};
+
+export const submitOrder = async (order: Order) => {
+  try {
+    const orderRef = doc(db, ORDERS_COLLECTION, order.orderId);
+    await setDoc(orderRef, {
+      ...order,
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error("Error submitting order to Firestore", error);
+    throw error;
+  }
+};
+
+export const fetchAnnouncement = async (): Promise<string | null> => {
+  try {
+    const announcementRef = doc(db, ANNOUNCEMENTS_COLLECTION, ANNOUNCEMENT_DOC_ID);
+    const snapshot = await getDoc(announcementRef);
+    if (snapshot.exists()) {
+      cachedAnnouncementDocId = snapshot.id;
+      const data = snapshot.data() as { message?: string };
+      return data.message ?? null;
+    }
+
+    const fallbackCollection = await getDocs(collection(db, ANNOUNCEMENTS_COLLECTION));
+    const firstDoc = fallbackCollection.docs[0];
+    if (firstDoc) {
+      cachedAnnouncementDocId = firstDoc.id;
+      const data = firstDoc.data() as { message?: string };
+      return data.message ?? null;
+    }
+
+    cachedAnnouncementDocId = ANNOUNCEMENT_DOC_ID;
+    return null;
+  } catch (error) {
+    console.error("Error fetching announcement from Firestore", error);
+    throw error;
+  }
+};
+
+export const saveAnnouncement = async (message: string) => {
+  try {
+    const targetDocId = cachedAnnouncementDocId ?? ANNOUNCEMENT_DOC_ID;
+    const announcementRef = doc(db, ANNOUNCEMENTS_COLLECTION, targetDocId);
+    await setDoc(announcementRef, { message, updatedAt: serverTimestamp() }, { merge: true });
+    cachedAnnouncementDocId = targetDocId;
+  } catch (error) {
+    console.error("Error saving announcement to Firestore", error);
+    throw error;
   }
 };

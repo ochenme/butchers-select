@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { addProduct, updateProduct, deleteProduct, fetchProducts } from "../services/geminiService";
+import { addProduct, updateProduct, deleteProduct, fetchProducts, uploadProductImage } from "../services/geminiService";
 import { Product } from "../types";
 import { useAnnouncement } from "../contexts/AnnouncementContext";
 
@@ -10,10 +10,12 @@ const AdminPage: React.FC = () => {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
-  const { announcement, updateAnnouncement } = useAnnouncement();
+  const { announcement, updateAnnouncement, isLoading: isAnnouncementLoading } = useAnnouncement();
   const [announcementText, setAnnouncementText] = useState<string>('');
+  const [isSavingAnnouncement, setIsSavingAnnouncement] = useState<boolean>(false);
 
   // 商品表單初始值
   const [formData, setFormData] = useState({
@@ -37,15 +39,23 @@ const AdminPage: React.FC = () => {
 
   // 🔹 載入商品
   useEffect(() => {
-    if (isAuthenticated) {
-      const load = async () => {
-        const data = await fetchProducts();
-        setProducts(data);
-      };
-      load();
+    if (!isAuthenticated) {
+      return;
+    }
+
+    const load = async () => {
+      const data = await fetchProducts();
+      setProducts(data);
+    };
+
+    load();
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (isAuthenticated && !isAnnouncementLoading) {
       setAnnouncementText(announcement);
     }
-  }, [isAuthenticated, announcement]);
+  }, [isAuthenticated, announcement, isAnnouncementLoading]);
 
   // 🔹 登入
   const handleLogin = (e: React.FormEvent) => {
@@ -72,6 +82,7 @@ const AdminPage: React.FC = () => {
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      setImageFile(file);
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData({ ...formData, imageUrl: reader.result as string });
@@ -88,57 +99,35 @@ const AdminPage: React.FC = () => {
     }
 
     const id = String(Date.now());
-    let imageUrls = "";
+    let imageUrl = formData.imageUrl;
 
     try {
-      // 若有上傳圖片（base64）
-      if (formData.imageUrl && formData.imageUrl.startsWith("data:image")) {
-        // ✅ 直接使用 Apps Script 的上傳端點
-        const SHEET_API =
-          "https://script.google.com/macros/s/AKfycbz-IFprQoGLeW-BQjaxHTSR-TZ0ZRKQo-CVxOtd78a4iL-5qte98gVR2Pc1NgP9Q-SN/exec";
-
-        const uploadRes = await fetch(SHEET_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "upload_image",
-            dataUrl: formData.imageUrl,
-            filename: `${id}_${Date.now()}.png`,
-          }),
-        });
-
-        const result = await uploadRes.json();
-        if (result.ok) {
-          imageUrls = Array.isArray(result.urls)
-            ? result.urls.join(",")
-            : result.url || result.urls?.[0] || "";
-        } else {
-          console.error("圖片上傳失敗：", result.error);
-          alert("圖片上傳失敗，請稍後再試。");
-        }
+      if (imageFile) {
+        imageUrl = await uploadProductImage(imageFile, id);
       }
+
+      // 建立商品物件（把圖片網址寫進去）
+      const newProduct = {
+        ...formData,
+        id,
+        price: Number(formData.price),
+        imageUrl,
+      };
+
+      await addProduct(newProduct);
+      alert("✅ 商品已上架！");
+
+      // 重置表單
+      setFormData({ id: "", name: "", category: "", description: "", price: "", imageUrl: "" });
+      setImageFile(null);
+      formRef.current?.reset();
+
+      const updated = await fetchProducts();
+      setProducts(updated);
     } catch (err) {
-      console.error("圖片上傳錯誤：", err);
-      alert("圖片上傳發生錯誤。");
+      console.error("新增商品失敗：", err);
+      alert("新增商品時發生錯誤，請稍後再試。");
     }
-
-    // 建立商品物件（把圖片網址寫進去）
-    const newProduct = {
-      ...formData,
-      id,
-      price: Number(formData.price),
-      imageUrl: imageUrls || formData.imageUrl, // 如果沒上傳新圖就保留原值
-    };
-
-    await addProduct(newProduct);
-    alert("✅ 商品已上架！");
-
-    // 重置表單
-    setFormData({ id: "", name: "", category: "", description: "", price: "", imageUrl: "" });
-    formRef.current?.reset();
-
-    const updated = await fetchProducts();
-    setProducts(updated);
   };
 
   // 🔹 編輯商品
@@ -149,41 +138,76 @@ const AdminPage: React.FC = () => {
       price: String(product.price),
       imageUrl: product.imageUrl || "",
     });
+    setImageFile(null);
   };
 
   // 🔹 更新商品
   const handleUpdate = async () => {
     if (!editingId) return;
-    await updateProduct({ ...formData, price: Number(formData.price) });
-    alert("✅ 商品已更新！");
-    setEditingId(null);
-    setFormData({ id: "", name: "", category: "", description: "", price: "", imageUrl: "" });
-    formRef.current?.reset();
+    try {
+      let imageUrl = formData.imageUrl;
+      if (imageFile) {
+        imageUrl = await uploadProductImage(imageFile, editingId);
+      }
 
-    const updated = await fetchProducts();
-    setProducts(updated);
+      await updateProduct({ ...formData, id: editingId, price: Number(formData.price), imageUrl });
+      alert("✅ 商品已更新！");
+      setEditingId(null);
+      setFormData({ id: "", name: "", category: "", description: "", price: "", imageUrl: "" });
+      setImageFile(null);
+      formRef.current?.reset();
+
+      const updated = await fetchProducts();
+      setProducts(updated);
+    } catch (err) {
+      console.error("更新商品失敗：", err);
+      alert("更新商品時發生錯誤，請稍後再試。");
+    }
   };
 
   // 🔹 刪除商品
   const handleDelete = async (id: string) => {
     if (!window.confirm("確定要刪除此商品嗎？")) return;
-    await deleteProduct(id);
-    alert("🗑️ 商品已刪除！");
-    const updated = await fetchProducts();
-    setProducts(updated);
+    try {
+      await deleteProduct(id);
+      alert("🗑️ 商品已刪除！");
+      const updated = await fetchProducts();
+      setProducts(updated);
+    } catch (err) {
+      console.error("刪除商品失敗：", err);
+      alert("刪除商品時發生錯誤，請稍後再試。");
+    }
   };
 
   // 🔹 取消編輯
   const handleCancelEdit = () => {
     setEditingId(null);
     setFormData({ id: "", name: "", category: "", description: "", price: "", imageUrl: "" });
+    setImageFile(null);
     formRef.current?.reset();
   };
 
   // 🔹 儲存公告
-  const handleSaveAnnouncement = () => {
-    updateAnnouncement(announcementText);
-    alert("✅ 公告已更新！");
+  const handleSaveAnnouncement = async () => {
+    const trimmed = announcementText.trim();
+    if (!trimmed) {
+      alert("公告內容不可為空");
+      return;
+    }
+
+    setAnnouncementText(trimmed);
+    setIsSavingAnnouncement(true);
+
+    try {
+      await updateAnnouncement(trimmed);
+      alert("✅ 公告已更新！");
+    } catch (err) {
+      console.error("更新公告失敗：", err);
+      setAnnouncementText(announcement);
+      alert("更新公告時發生錯誤，請稍後再試。");
+    } finally {
+      setIsSavingAnnouncement(false);
+    }
   };
 
   // 🔐 登入畫面
@@ -362,15 +386,17 @@ const AdminPage: React.FC = () => {
           value={announcementText}
           onChange={(e) => setAnnouncementText(e.target.value)}
           placeholder="輸入公告內容..."
-          className="border rounded p-2 w-full min-h-[80px] focus:outline-none focus:ring-2 focus:ring-amber-500"
+          className="border rounded p-2 w-full min-h-[80px] focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:bg-gray-100"
+          disabled={isAnnouncementLoading || isSavingAnnouncement}
         />
         <div className="mt-4 flex justify-end">
           <button
             type="button"
             onClick={handleSaveAnnouncement}
-            className="bg-amber-500 text-zinc-900 font-semibold px-4 py-2 rounded hover:bg-amber-600 transition-colors"
+            className="bg-amber-500 text-zinc-900 font-semibold px-4 py-2 rounded transition-colors disabled:bg-gray-400 disabled:text-gray-200 disabled:cursor-not-allowed hover:bg-amber-600"
+            disabled={isAnnouncementLoading || isSavingAnnouncement}
           >
-            儲存公告
+            {isSavingAnnouncement ? '儲存中…' : '儲存公告'}
           </button>
         </div>
       </div>
