@@ -1,0 +1,309 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { useCart } from '../contexts/CartContext';
+import { Link, useNavigate } from 'react-router-dom';
+import { submitOrder } from '../services/geminiService';
+import { useAuth } from '../contexts/AuthContext';
+
+const TrashIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" {...props}>
+    <path
+      fillRule="evenodd"
+      d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z"
+      clipRule="evenodd"
+    />
+  </svg>
+);
+
+const PlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" {...props}>
+    <path
+      fillRule="evenodd"
+      d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"
+      clipRule="evenodd"
+    />
+  </svg>
+);
+
+const MinusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" {...props}>
+    <path fillRule="evenodd" d="M5 10a1 1 0 011-1h8a1 1 0 110 2H6a1 1 0 01-1-1z" clipRule="evenodd" />
+  </svg>
+);
+
+const CartPage: React.FC = () => {
+  const { cartItems, updateQuantity, removeFromCart, clearCart } = useCart();
+  const { member } = useAuth();
+  const navigate = useNavigate();
+  const [customerName, setCustomerName] = useState(member?.name ?? '');
+  const [phone, setPhone] = useState(member?.phone ?? '');
+  const [address, setAddress] = useState(member?.address ?? '');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const checkoutSteps = useMemo(
+    () => [
+      { title: '購物車', description: '確認購買商品' },
+      { title: '填寫資料', description: '輸入收件資訊' },
+      { title: '確認訂單', description: '核對金額與內容' },
+      { title: '完成', description: '等待出貨通知' },
+    ],
+    [],
+  );
+
+  useEffect(() => {
+    if (member) {
+      setCustomerName(member.name);
+      setPhone(member.phone);
+      setAddress(member.address);
+    } else {
+      setCustomerName('');
+      setPhone('');
+      setAddress('');
+    }
+  }, [member]);
+
+  const total = cartItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  if (!member) {
+    return (
+      <div className="max-w-lg mx-auto bg-white rounded-2xl shadow-xl p-10 text-center space-y-6">
+        <h1 className="text-3xl font-serif text-zinc-900">此服務僅限會員使用</h1>
+        <p className="text-gray-600">
+          請先登入或註冊會員帳號後再繼續選購商品，我們將為您保留完整的購物流程。
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/account')}
+          className="inline-flex items-center justify-center bg-amber-500 hover:bg-amber-600 text-zinc-900 font-semibold py-3 px-8 rounded-lg transition-colors"
+        >
+          前往會員登入 / 註冊
+        </button>
+      </div>
+    );
+  }
+
+  const handleCheckout = async (event: React.FormEvent) => {
+    event.preventDefault();
+
+    if (!customerName || !phone || !address) {
+      alert('請完整填寫姓名、電話與地址');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    const orderId = `BS-${Date.now()}`;
+    const orderData = {
+      orderId,
+      timestamp: new Date().toISOString(),
+      customerName,
+      phone,
+      address,
+      total,
+      items: cartItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+        subtotal: item.price * item.quantity,
+      })),
+    };
+
+    try {
+      await submitOrder(orderData);
+      clearCart();
+      navigate(`/confirmation/${orderId}`);
+    } catch (error) {
+      console.error('Error submitting order:', error);
+      alert('訂單提交失敗，請稍後再試。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (cartItems.length === 0) {
+    return (
+      <div className="text-center space-y-6">
+        <h1 className="text-4xl font-serif text-zinc-900">您的購物車是空的</h1>
+        <p className="text-gray-600">看起來您尚未加入任何商品。</p>
+        <Link
+          to="/"
+          className="inline-flex items-center justify-center bg-[#1f3c88] hover:bg-[#162d66] text-white font-semibold py-3 px-8 rounded-lg transition-colors"
+        >
+          繼續選購
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-10">
+      <div className="text-center space-y-4">
+        <h1 className="text-4xl font-serif text-zinc-900">購物流程</h1>
+        <p className="text-gray-500">填寫資料即可完成下單，會員資料會自動套用。</p>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-xl p-8">
+        <ol className="grid gap-6 md:grid-cols-4">
+          {checkoutSteps.map(({ title, description }, index) => (
+            <li key={title} className="flex flex-col items-center text-center">
+              <div
+                className={`flex items-center justify-center h-12 w-12 rounded-full border-2 text-sm font-semibold ${
+                  index === 0 ? 'bg-amber-500 border-amber-500 text-zinc-900' : 'border-gray-200 text-gray-400'
+                }`}
+              >
+                {index + 1}
+              </div>
+              <p className="mt-4 text-base font-semibold text-zinc-900">{title}</p>
+              <p className="mt-1 text-sm text-gray-500">{description}</p>
+              {index < checkoutSteps.length - 1 ? (
+                <div className="hidden md:block w-full h-px bg-gradient-to-r from-amber-200 via-gray-200 to-amber-200 mt-4" />
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+        <div className="lg:col-span-2 space-y-8">
+          <div className="bg-white p-8 rounded-2xl shadow-xl">
+            <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
+              <h2 className="text-2xl font-bold text-zinc-900">購物車商品</h2>
+              <p className="text-sm text-gray-500">共 {cartItems.length} 項商品</p>
+            </div>
+            <div className="space-y-6">
+              {cartItems.map((item) => {
+                const imageUrl =
+                  item.imageUrls && item.imageUrls.length > 0
+                    ? item.imageUrls[0]
+                    : item.imageUrl || `https://picsum.photos/seed/${item.id}/100/100`;
+
+                return (
+                  <div
+                    key={item.id}
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6 border-b border-gray-200 pb-6 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex items-center gap-4">
+                      <img src={imageUrl} alt={item.name} className="w-24 h-24 rounded-lg object-cover" />
+                      <div>
+                        <p className="font-semibold text-lg text-zinc-900">{item.name}</p>
+                        <p className="text-sm text-gray-500">NT$ {item.price}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 self-end sm:self-auto">
+                      <div className="flex items-center border border-gray-300 rounded-md overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                          className="px-3 py-2 text-gray-600 hover:bg-gray-100"
+                          aria-label="減少數量"
+                        >
+                          <MinusIcon />
+                        </button>
+                        <span className="px-4 py-2 text-zinc-900 font-semibold">{item.quantity}</span>
+                        <button
+                          type="button"
+                          onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                          className="px-3 py-2 text-gray-600 hover:bg-gray-100"
+                          aria-label="增加數量"
+                        >
+                          <PlusIcon />
+                        </button>
+                      </div>
+                      <p className="font-semibold text-zinc-900 w-24 text-right">NT$ {item.price * item.quantity}</p>
+                      <button
+                        type="button"
+                        onClick={() => removeFromCart(item.id)}
+                        className="text-gray-300 hover:text-red-500 transition-colors duration-200"
+                        aria-label="移除商品"
+                      >
+                        <TrashIcon />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="bg-white p-8 rounded-2xl shadow-xl">
+            <h3 className="text-xl font-semibold text-zinc-900 mb-6">訂單備註</h3>
+            <p className="text-sm text-gray-500 leading-relaxed">
+              商品出貨時間依供應及物流狀況為準，如有特殊需求請於結帳後聯繫客服協助處理。
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-white p-8 rounded-2xl shadow-xl h-fit">
+          <h2 className="text-2xl font-bold mb-6 text-zinc-900">訂單資訊</h2>
+          <div className="mb-6 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg p-4 text-sm leading-relaxed">
+            已套用會員資料，如需更新請前往{' '}
+            <Link to="/account" className="font-semibold underline">
+              會員中心
+            </Link>
+            。
+          </div>
+          <form onSubmit={handleCheckout} className="space-y-5">
+            <div className="space-y-2">
+            <label htmlFor="customerName" className="block text-sm font-medium text-gray-700">
+              收件人姓名
+            </label>
+            <input
+              type="text"
+              id="customerName"
+              value={customerName}
+              onChange={(event) => setCustomerName(event.target.value)}
+              className="w-full bg-gray-100 border border-gray-300 rounded-md px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="phone" className="block text-sm font-medium text-gray-700">
+              聯絡電話
+            </label>
+            <input
+              type="tel"
+              id="phone"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              className="w-full bg-gray-100 border border-gray-300 rounded-md px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="address" className="block text-sm font-medium text-gray-700">
+              收件地址
+            </label>
+            <input
+              type="text"
+              id="address"
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              className="w-full bg-gray-100 border border-gray-300 rounded-md px-3 py-2 text-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+              required
+            />
+          </div>
+          <div className="space-y-3 border-t border-gray-200 pt-4">
+            <div className="flex items-center justify-between text-sm text-gray-600">
+              <span>商品金額</span>
+              <span>NT$ {total}</span>
+            </div>
+            <div className="flex items-center justify-between text-lg font-bold text-zinc-900">
+              <span>應付總額</span>
+              <span className="text-amber-500">NT$ {total}</span>
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full bg-[#1f3c88] hover:bg-[#162d66] text-white font-semibold py-3 px-4 rounded-lg transition-colors duration-300 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {isSubmitting ? '處理中…' : '送出訂單'}
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  );
+};
+
+export default CartPage;
